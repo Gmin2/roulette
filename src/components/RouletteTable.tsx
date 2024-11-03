@@ -1,131 +1,325 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { getMousePos, get_roulette_bets, isInside } from '../utils/games';
-import Image from 'next/image';
-import carrotImg from '../public/img/icons/carrot_icon.png';
 
-function RouletteTable({ page, user, onBetsChange }) {
-  const canvasRef = useRef(null);
-  const [rouletteType, setRouletteType] = useState(page.game.table_type);
-  const [listBets, setListBets] = useState([]);
-  const [yourBets, setYourBets] = useState([]);
+"use client";
+import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
+import { getMousePos, isInside } from '../utils/games';
+
+interface Bet {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  text: string;
+  bet_value: number;
+}
+
+interface RouletteTableProps {
+  onBetPlace: (bets: Bet[]) => void;
+  balance: number;
+  disabled: boolean;
+  currentBets: Bet[];
+}
+
+export interface RouletteTableRef {
+  resetBets: () => void;
+}
+
+const RouletteTable = forwardRef<RouletteTableRef, RouletteTableProps>(({
+  onBetPlace,
+  balance,
+  disabled,
+  currentBets
+}, ref) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [ctx, setCtx] = useState<CanvasRenderingContext2D | null>(null);
+  const [smallImage, setSmallImage] = useState(false);
+  const [rouletteBetsCoord, setRouletteBetsCoord] = useState([0, 0, 795, 268, 0, 0, 795, 268]);
+  const [listBets, setListBets] = useState<Bet[]>([]);
+  const [yourBets, setYourBets] = useState<Bet[]>([]);
   const [betSquare, setBetSquare] = useState(40);
-  const [money, setMoney] = useState(user.money);
+  const [betValueSum, setBetValueSum] = useState(0);
+  const [baseValue, setBaseValue] = useState(10); // Base betting value
 
-  const createCanvas = useCallback(() => {
+  const numbers = [
+    "0", "32", "15", "19", "4", "21", "2", "25", "17", "34", "6", "27",
+    "13", "36", "11", "30", "8", "23", "10", "5", "24", "16", "33", "1",
+    "20", "14", "31", "9", "22", "18", "29", "7", "28", "12", "35", "3", "26"
+  ];
+
+  // Expose resetBets method
+  useImperativeHandle(ref, () => ({
+    resetBets: () => {
+      setYourBets([]);
+      setBetValueSum(0);
+      drawTable();
+    }
+  }));
+
+  useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    let rouletteBetsCoord;
+    if (canvas) {
+      const context = canvas.getContext("2d");
+      setCtx(context);
+      createCanvas();
+    }
+
+    window.addEventListener('resize', createCanvas);
+    return () => window.removeEventListener('resize', createCanvas);
+  }, []);
+
+  useEffect(() => {
+    if (ctx) {
+      drawTable();
+      currentBets.forEach(bet => drawBetToken(bet));
+    }
+  }, [ctx, listBets, currentBets]);
+
+  const createCanvas = () => {
+    if (!canvasRef.current) return;
 
     if (window.innerWidth < 960) {
       if (window.innerHeight < window.innerWidth) {
         // small landscape
-        canvas.width = 400;
-        canvas.height = 135;
-        rouletteBetsCoord = [0, 0, 795, 268, 0, 0, 400, 135];
+        canvasRef.current.width = 400;
+        canvasRef.current.height = 135;
+        setRouletteBetsCoord([0, 0, 795, 268, 0, 0, 400, 135]);
+        setSmallImage(false);
+        setBetSquare(30);
       } else {
         // small portrait
-        canvas.width = 135;
-        canvas.height = 400;
-        rouletteBetsCoord = [0, 0, 382, 1136, 0, 0, 191, 568];
+        canvasRef.current.width = 135;
+        canvasRef.current.height = 400;
+        setSmallImage(true);
+        setRouletteBetsCoord([0, 0, 382, 1136, 0, 0, 191, 568]);
+        setBetSquare(30);
       }
-      setBetSquare(30);
     } else {
       // big
-      canvas.width = 795;
-      canvas.height = 270;
-      rouletteBetsCoord = [0, 0, 795, 268, 0, 0, 795, 268];
+      canvasRef.current.width = 795;
+      canvasRef.current.height = 270;
+      setRouletteBetsCoord([0, 0, 795, 268, 0, 0, 795, 268]);
       setBetSquare(40);
     }
+    setupBettingGrid();
+  };
 
-    return { ctx, rouletteBetsCoord };
-  }, []);
+  const getSquaresByScreenSize = () => {
+    if (window.innerWidth < 960) {
+      if (window.innerHeight < window.innerWidth) {
+        return {
+          a: {x: 0, y: 0, w: 27, h: 78}, // 0
+          c: {x: 26, y: 80, w: 27, h: 27}, // first square
+          d: {x: 27, y: 80, w: 106, h: 27}, // first 12
+          e: {x: 27, y: 110, w: 53, h: 27}, // 1-18
+          f: {x: 345, y: 0, w: 53, h: 27}, // 2 to 1
+        };
+      } else {
+        return {
+          a: {x: 53, y: 0, w: 78, h: 27},
+          c: {x: 27, y: 27, w: 27, h: 26},
+          d: {x: 27, y: 27, w: 27, h: 106},
+          e: {x: 0, y: 27, w: 27, h: 53},
+          f: {x: 53, y: 345, w: 27, h: 53},
+        };
+      }
+    } else {
+      return {
+        a: {x: 0, y: 0, w: 53, h: 160},
+        c: {x: 50, y: 160, w: 53, h: 57},
+        d: {x: 50, y: 160, w: 212, h: 57},
+        e: {x: 50, y: 212, w: 106, h: 57},
+        f: {x: 685, y: 0, w: 106, h: 53},
+      };
+    }
+  };
 
-  const drawRouletteBets = useCallback((ctx, img, rouletteBetsCoord) => {
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    const [sx, sy, swidth, sheight, x, y, width, height] = rouletteBetsCoord;
-    ctx.drawImage(img, sx, sy, swidth, sheight, x, y, width, height);
-  }, []);
+  const setupBettingGrid = () => {
+    const squares = getSquaresByScreenSize();
+    const newListBets: Bet[] = [];
+    let a = 0;
 
-  const createRouletteBets = useCallback(() => {
-    const items = get_roulette_bets();
-    const numbers = rouletteType === 'european' 
-      ? ["0", "32", "15", "19", "4", "21", "2", "25", "17", "34", "6", "27", "13", "36", "11", "30", "8", "23", "10", "5", "24", "16", "33", "1", "20", "14", "31", "9", "22", "18", "29", "7", "28", "12", "35", "3", "26"]
-      : ["0", "28", "9", "26", "30", "11", "7", "20", "32", "17", "5", "22", "34", "15", "3", "24", "36", "13", "1", "00", "27", "10", "25", "29", "12", "8", "19", "31", "18", "6", "21", "33", "16", "4", "23", "35", "14", "2"];
+    // Add zero
+    newListBets.push({
+      x: squares.a.x,
+      y: squares.a.y,
+      width: squares.a.w,
+      height: squares.a.h,
+      color: "green",
+      text: "0",
+      bet_value: baseValue
+    });
 
-    // Implement the logic to create roulette bets based on the canvas size and roulette type
-    // This should populate the listBets state
-    // For brevity, I'm omitting the detailed implementation here
-    
-    setListBets(/* calculated list bets */);
-  }, [rouletteType]);
-
-  const handleCanvasClick = useCallback((event) => {
-    const canvas = canvasRef.current;
-    const mousePos = getMousePos(canvas, event);
-    
-    for (let obj of listBets) {
-      if (isInside(mousePos, obj)) {
-        const newBetValueSum = yourBets.reduce((sum, bet) => sum + bet.bet_value, 0) + obj.bet_value;
-        if (newBetValueSum > money) {
-          alert("Not enough money for this bet");
+    // Add numbers
+    if (!smallImage) {
+      for (let i = 1; i < numbers.length; i++) {
+        a++;
+        if (a > 3) {
+          squares.c.x = squares.c.x + squares.c.w;
+          squares.c.y = squares.c.y + 2 * squares.c.w;
+          a = 1;
         } else {
-          const newYourBets = [...yourBets, obj];
-          setYourBets(newYourBets);
-          onBetsChange(newYourBets);
-          drawToken(obj);
+          squares.c.y = squares.c.y - squares.c.w;
         }
+
+        newListBets.push({
+          x: squares.c.x,
+          y: squares.c.y,
+          width: squares.c.w,
+          height: squares.c.h,
+          color: i % 2 === 0 ? "red" : "black",
+          text: numbers[i],
+          bet_value: baseValue
+        });
+      }
+    } else {
+      for (let i = 1; i < numbers.length; i++) {
+        a++;
+        if (a > 3) {
+          squares.c.x = squares.c.x - 2 * squares.c.w;
+          squares.c.y = squares.c.y + squares.c.h;
+          a = 1;
+        } else {
+          squares.c.x = squares.c.x + squares.c.w;
+        }
+
+        newListBets.push({
+          x: squares.c.x,
+          y: squares.c.y,
+          width: squares.c.w,
+          height: squares.c.h,
+          color: i % 2 === 0 ? "red" : "black",
+          text: numbers[i],
+          bet_value: baseValue
+        });
+      }
+    }
+
+    setListBets(newListBets);
+  };
+
+  const drawTable = () => {
+    if (!ctx || !canvasRef.current) return;
+
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    
+    // Draw background
+    ctx.fillStyle = '#0f672e';
+    ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+
+    // Draw grid lines
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1;
+
+    // Draw betting squares
+    listBets.forEach(bet => {
+      ctx.beginPath();
+      ctx.fillStyle = bet.color;
+      ctx.fillRect(bet.x, bet.y, bet.width, bet.height);
+      ctx.strokeRect(bet.x, bet.y, bet.width, bet.height);
+
+      // Draw number text
+      ctx.fillStyle = 'white';
+      ctx.font = `${smallImage ? '10px' : '12px'} Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(
+        bet.text,
+        bet.x + bet.width / 2,
+        bet.y + bet.height / 2
+      );
+    });
+  };
+
+  const drawBetToken = (bet: Bet) => {
+    if (!ctx) return;
+
+    const x = bet.x + bet.width / 2;
+    const y = bet.y + bet.height / 2;
+    const radius = Math.min(bet.width, bet.height) / 3;
+
+    // Draw betting chip
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffd700';
+    ctx.fill();
+    ctx.strokeStyle = '#b8860b';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    
+    // Draw bet value
+    ctx.fillStyle = 'black';
+    ctx.font = `bold ${smallImage ? '8px' : '10px'} Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(bet.bet_value.toString(), x, y);
+  };
+
+  const handleCanvasClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (disabled) return;
+
+    const mousePos = getMousePos(canvasRef.current!, event);
+    
+    for (const bet of listBets) {
+      if (isInside(mousePos, bet)) {
+        if (betValueSum + bet.bet_value > balance) {
+          alert("Insufficient balance!");
+          return;
+        }
+
+        const newBet = { ...bet };
+        setBetValueSum(prev => prev + newBet.bet_value);
+        const newBets = [...yourBets, newBet];
+        setYourBets(newBets);
+        onBetPlace(newBets);
         break;
       }
     }
-  }, [listBets, yourBets, money, onBetsChange]);
+  };
 
-  const drawToken = useCallback((bet) => {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const x = bet.x + bet.width / 2 - betSquare / 4;
-    const y = bet.y + bet.height / 2 - betSquare / 4 - 5;
-    const w = betSquare / 2;
-    const h = betSquare / 2 + 10;
-    
-    const img = new Image();
-    img.src = carrotImg.src;
-    img.onload = () => {
-      ctx.drawImage(img, x, y, w, h);
-    };
-  }, [betSquare]);
+  const handleBaseValueChange = (value: number) => {
+    setBaseValue(value);
+    setListBets(prev => 
+      prev.map(bet => ({
+        ...bet,
+        bet_value: value
+      }))
+    );
+  };
 
-  useEffect(() => {
-    const { ctx, rouletteBetsCoord } = createCanvas();
-    createRouletteBets();
+  return (
+    <div className="relative">
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Bet Amount:
+        </label>
+        <div className="flex gap-2">
+          {[10, 20, 50, 100].map(value => (
+            <button
+              key={value}
+              onClick={() => handleBaseValueChange(value)}
+              className={`px-3 py-1 rounded ${
+                baseValue === value 
+                  ? 'bg-green-600 text-white' 
+                  : 'bg-gray-200 text-gray-700'
+              }`}
+            >
+              ${value}
+            </button>
+          ))}
+        </div>
+      </div>
 
-    // Load and draw the roulette image
-    const img = new Image();
-    img.src = `/img/roulette_${rouletteType}.png`; // Assuming you have these images
-    img.onload = () => drawRouletteBets(ctx, img, rouletteBetsCoord);
-
-    const canvas = canvasRef.current;
-    canvas.addEventListener('click', handleCanvasClick);
-
-    return () => {
-      canvas.removeEventListener('click', handleCanvasClick);
-    };
-  }, [createCanvas, createRouletteBets, drawRouletteBets, handleCanvasClick, rouletteType]);
-
-  useEffect(() => {
-    const handleResize = () => {
-      const { ctx, rouletteBetsCoord } = createCanvas();
-      createRouletteBets();
+      <canvas
+        ref={canvasRef}
+        onClick={handleCanvasClick}
+        className="border border-gray-300 rounded-lg shadow-lg"
+      />
       
-      const img = new Image();
-      img.src = `/img/roulette_${rouletteType}.png`;
-      img.onload = () => drawRouletteBets(ctx, img, rouletteBetsCoord);
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [createCanvas, createRouletteBets, drawRouletteBets, rouletteType]);
-
-  return <canvas ref={canvasRef} />;
-}
+      <div className="absolute top-2 right-2 bg-black/50 text-white p-2 rounded">
+        Total Bet: ${betValueSum}
+      </div>
+    </div>
+  );
+});
 
 export default RouletteTable;

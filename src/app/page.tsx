@@ -1,10 +1,11 @@
-import RouletteGame from "@/components/RouletteGame";
-import Image from "next/image";
+import RouletteGame from '@/components/RouletteGame';
+import React from 'react'
 
-export default function Home() {
+
+const Home = () => {
   return (
-    <div className="">
-      <RouletteGame page={{ game: { table_type: 'european' } }} />
-    </div>
-  );
+    <RouletteGame />
+  )
 }
+
+export default Home;
